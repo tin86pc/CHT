@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Camera Hành Trình — HUD Tối ưu</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        html, body {
+            height: 100%;
+            font-family: -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            background: #000;
+            overflow: hidden;
+            position: fixed;
+            width: 100%;
+        }
+        .app {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        .canvas-container {
+            position: absolute;
+            inset: 0;
+            background: #000;
+        }
+        #renderCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        #videoPreview {
+            position: absolute;
+            opacity: 0;
+            pointer-events: none;
+            width: 1px;
+            height: 1px;
+        }
+        .camera-status {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(255,255,255,0.7);
+            font-size: 4vmin;
+            text-align: center;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        .ui-wrapper {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(0deg);
+            transform-origin: center center;
+            transition: transform 0.3s ease;
+            z-index: 10;
+            width: 75vmin;
+        }
+        .ui-wrapper.landscape {
+            transform: translate(-50%, -50%) rotate(90deg);
+            width: 75vmin;
+        }
+
+        .control-modal {
+            width: 100%;
+            background: rgba(20, 20, 25, 0.92);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            border-radius: 4vmin;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            gap: 3vmin;
+            padding: 4vmin;
+            backdrop-filter: blur(20px);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.25s ease, visibility 0.25s ease;
+        }
+        .control-modal.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+        .btn-row {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-around;
+            align-items: center;
+            width: 100%;
+            gap: 2vmin;
+        }
+        .btn {
+            width: 14vmin;
+            height: 14vmin;
+            border-radius: 50%;
+            border: 0.5vmin solid rgba(255, 255, 255, 0.18);
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.8);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 6vmin;
+            transition: transform 0.15s ease;
+            touch-action: manipulation;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .btn:active { transform: scale(0.9); background: rgba(255, 255, 255, 0.2); }
+        .btn:disabled { opacity: 0.35; pointer-events: none; }
+        .btn-mirror { color: rgba(255, 255, 255, 0.8); }
+        .btn-cam { color: #007aff; }
+        .btn-rotate { color: #9c27b0; }
+        .btn-save { color: #ff9500; border-color: rgba(255, 149, 0, 0.3); }
+        .ram-row {
+            display: flex;
+            align-items: center;
+            gap: 2.5vmin;
+            width: 100%;
+            font-size: 3vmin;
+            color: rgba(255,255,255,0.45);
+        }
+        .ram-bar-bg {
+            flex: 1;
+            height: 1.8vmin;
+            background: rgba(255,255,255,0.1);
+            border-radius: 1vmin;
+            overflow: hidden;
+        }
+        .ram-bar-fill {
+            height: 100%;
+            width: 0%;
+            border-radius: 1vmin;
+            transition: width 0.3s, background 0.3s;
+        }
+        .ram-bar-fill.green { background: #34c759; }
+        .ram-bar-fill.yellow { background: #ff9500; }
+        .ram-bar-fill.red { background: #ff3b30; animation: blink 0.8s infinite; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.5} }
+        .ram-row select {
+            padding: 1vmin 2vmin;
+            border-radius: 1.5vmin;
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            background: rgba(0,0,0,0.3);
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 3vmin;
+            outline: none;
+        }
+        .ram-text { font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .toast {
+            position: fixed;
+            bottom: 10vmin;
+            left: 50%;
+            transform: translateX(-50%) translateY(2vmin);
+            background: rgba(20, 20, 25, 0.92);
+            color: #fff;
+            padding: 3vmin 6vmin;
+            border-radius: 3vmin;
+            font-size: 3.5vmin;
+            backdrop-filter: blur(15px);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+            opacity: 0;
+            transition: all 0.3s ease;
+            pointer-events: none;
+            z-index: 100;
+            max-width: 90vw;
+            text-align: center;
+        }
+        .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+        .toast.success { border-color: rgba(52, 199, 89, 0.4); }
+        .toast.warning { border-color: rgba(255, 149, 0, 0.4); }
+        .toast.danger { border-color: rgba(255, 59, 48, 0.4); }
+    </style>
+</head>
+<body>
+<div class="app">
+    <div class="canvas-container" id="canvasContainer">
+        <video id="videoPreview" autoplay muted playsinline></video>
+        <canvas id="renderCanvas"></canvas>
+        <div class="camera-status" id="cameraStatus">Đang khởi động camera...</div>
+    </div>
+
+    <div class="ui-wrapper" id="uiWrapper">
+        <div class="control-modal" id="controlModal">
+            <div class="btn-row">
+                <button class="btn btn-mirror" id="btnMirror" title="Lật ngang hình">↔️</button>
+                <button class="btn btn-rotate" id="btnRotate" title="Xoay chữ/HUD">🔄</button>
+                <button class="btn btn-save" id="btnSave" disabled title="Lưu video từ RAM">💾</button>
+                <button class="btn btn-cam" id="btnCam" title="Chuyển camera">📷</button>
+            </div>
+            <div class="ram-row">
+                <span>RAM:</span>
+                <div class="ram-bar-bg"><div class="ram-bar-fill green" id="ramBar"></div></div>
+                <span class="ram-text" id="ramText">0/200MB</span>
+                <select id="ramLimit">
+                    <option value="50">50MB</option>
+                    <option value="100">100MB</option>
+                    <option value="200" selected>200MB</option>
+                    <option value="300">300MB</option>
+                    <option value="500">500MB</option>
+                    <option value="1000">1GB</option>
+                    <option value="0">∞</option>
+                </select>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+let toastTimer = null;
+function showToast(msg, dur = 2500, type = '') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast show ' + type;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('show'), dur);
+}
+
+const controlModal = document.getElementById('controlModal');
+const canvasContainer = document.getElementById('canvasContainer');
+const uiWrapper = document.getElementById('uiWrapper');
+const cameraStatus = document.getElementById('cameraStatus');
+let hideTimer = null;
+const SHOW_DURATION = 5000;
+
+function showControls() {
+    controlModal.classList.add('visible');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(hideControls, SHOW_DURATION);
+}
+function hideControls() {
+    controlModal.classList.remove('visible');
+    clearTimeout(hideTimer);
+}
+// Single pointer handler — refreshes auto-hide timer on any tap
+// (buttons call stopPropagation + showControls themselves)
+canvasContainer.addEventListener('pointerup', () => showControls(), { passive: true });
+
+class GPSTracker {
+    constructor() {
+        this.watchId = null;
+        this.speed = 0;
+        this.active = false;
+        this.lastPos = null;
+    }
+    start() {
+        if (!navigator.geolocation) {
+            showToast('❌ Trình duyệt không hỗ trợ GPS', 3000, 'danger');
+            return false;
+        }
+        this.active = true;
+        this.watchId = navigator.geolocation.watchPosition(
+            p => this.handle(p),
+            e => this.err(e),
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 1000 }
+        );
+        return true;
+    }
+    stop() {
+        this.active = false;
+        if (this.watchId) navigator.geolocation.clearWatch(this.watchId);
+        this.speed = 0;
+    }
+    handle(pos) {
+        const c = pos.coords;
+        if (c.speed !== null && c.speed >= 0) {
+            this.speed = Math.round(c.speed * 3.6 * 10) / 10;
+        } else {
+            this.speed = this.calcSpeed(c, pos.timestamp);
+        }
+    }
+    calcSpeed(coords, ts) {
+        if (!this.lastPos) {
+            this.lastPos = { lat: coords.latitude, lng: coords.longitude, ts };
+            return 0;
+        }
+        const d = this.dist(this.lastPos.lat, this.lastPos.lng, coords.latitude, coords.longitude);
+        const t = (ts - this.lastPos.ts) / 1000;
+        this.lastPos = { lat: coords.latitude, lng: coords.longitude, ts };
+        return t > 0 && d > 1 ? Math.round((d / t) * 3.6 * 10) / 10 : 0;
+    }
+    dist(lat1, lon1, lat2, lon2) {
+        const R = 6371e3, r = Math.PI / 180;
+        const dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
+        const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
+        return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+    err(e) {
+        console.warn('GPS error:', e.code);
+    }
+    getSpeed() { return this.speed; }
+}
+
+class VideoRecorder {
+    constructor(maxMB = 200) {
+        this.max = maxMB === 0 ? Infinity : maxMB * 1024 * 1024;
+        this.chunks = [];
+        this.totalSize = 0;
+        this.firstChunk = null;
+        this.hasHeader = false;
+        this.canvas = document.getElementById('renderCanvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.video = document.getElementById('videoPreview');
+        this.gps = new GPSTracker();
+        this.facing = 'user';
+        this.mirror = false;
+        this.rotateHUD = 0;
+        this.rendering = false;
+        this.stream = null;
+        this.canvasStream = null;
+        this.recorder = null;
+        this.recording = false;
+        this.segTime = 1000;
+        this.cameraReady = false;
+        this.switching = false;
+    }
+
+    setMaxMB(mb) {
+        this.max = mb === 0 ? Infinity : mb * 1024 * 1024;
+        this.capChunks();
+        this.updateRAMUI();
+    }
+
+    async initCam(facing = 'user') {
+        cameraStatus.style.display = 'block';
+        cameraStatus.textContent = 'Đang khởi động camera...';
+        
+        const constraintsOptions = [
+            { video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: true },
+            { video: { facingMode: facing }, audio: true },
+            { video: { facingMode: { exact: facing } }, audio: true },
+            { video: true, audio: true }
+        ];
+
+        for (let cons of constraintsOptions) {
+            try {
+                this.stream = await navigator.mediaDevices.getUserMedia(cons);
+                this.facing = facing;
+                this.video.srcObject = this.stream;
+                await this.video.play();
+                await new Promise(resolve => {
+                    if (this.video.videoWidth) resolve();
+                    else this.video.onloadedmetadata = resolve;
+                });
+                this.cameraReady = true;
+                cameraStatus.style.display = 'none';
+                this.startDraw();
+                this.gps.start();
+                this.startRecording();
+                showToast('✅ Camera đã sẵn sàng', 2000, 'success');
+                return true;
+            } catch (err) {
+                console.warn('Thử cấu hình thất bại:', cons, err);
+                continue;
+            }
+        }
+
+        cameraStatus.textContent = '❌ Không truy cập được camera';
+        showToast('❌ Không truy cập được camera. Kiểm tra quyền & kết nối HTTPS', 4000, 'danger');
+        return false;
+    }
+
+    async switchCam() {
+        if (this.switching) return;
+        this.switching = true;
+
+        const newFacing = this.facing === 'user' ? 'environment' : 'user';
+
+        this.stopRecording();
+
+        if (this.stream) {
+            this.stream.getTracks().forEach(track => {
+                track.stop();
+            });
+            this.stream = null;
+        }
+
+        this.chunks = [];
+        this.totalSize = 0;
+        this.firstChunk = null;
+        this.hasHeader = false;
+
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        const ok = await this.initCam(newFacing);
+        if (ok) {
+            showToast(`✅ Đã chuyển camera: ${newFacing === 'user' ? 'Trước' : 'Sau'}`, 2000, 'success');
+        } else {
+            showToast('❌ Không thể chuyển camera, thử lại', 3000, 'danger');
+            await this.initCam(this.facing);
+        }
+
+        this.switching = false;
+    }
+
+    toggleMirror() {
+        this.mirror = !this.mirror;
+        showToast(this.mirror ? '🔄 Bật gương hình' : '🔄 Tắt gương hình', 2000);
+    }
+
+    toggleRotate() {
+        this.rotateHUD = this.rotateHUD === 0 ? 90 : 0;
+        uiWrapper.classList.toggle('landscape', this.rotateHUD === 90);
+        showToast(this.rotateHUD === 90 ? '🔄 Chữ xoay ngang' : '🔄 Chữ trở lại dọc', 2000);
+    }
+
+    startRecording() {
+        if (this.recording) return;
+        this.chunks = []; this.totalSize = 0; this.firstChunk = null; this.hasHeader = false;
+
+        this.canvasStream = this.canvas.captureStream(30);
+        const aTrack = this.stream?.getAudioTracks()[0];
+        if (aTrack) this.canvasStream.addTrack(aTrack);
+
+        let mime = 'video/webm;codecs=vp9,opus';
+        if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm;codecs=vp8,opus';
+        if (!MediaRecorder.isTypeSupported(mime)) mime = 'video/webm';
+
+        this.recorder = new MediaRecorder(this.canvasStream, { mimeType: mime });
+        this.recorder.ondataavailable = e => this.onChunk(e);
+        this.recorder.start(this.segTime);
+        this.recording = true;
+    }
+
+    stopRecording() {
+        if (!this.recording) return;
+        this.recorder.stop();
+        this.recording = false;
+    }
+
+    onChunk(e) {
+        if (!e.data.size) return;
+        if (!this.hasHeader) { this.firstChunk = e.data; this.hasHeader = true; }
+        this.chunks.push(e.data);
+        this.totalSize += e.data.size;
+        this.capChunks();
+        this.updateRAMUI();
+    }
+
+    capChunks() {
+        while (this.chunks.length > 1 && this.totalSize > this.max) {
+            const rm = this.chunks.shift();
+            this.totalSize -= rm.size;
+            if (rm === this.firstChunk && this.chunks.length) {
+                this.chunks.unshift(rm);
+                this.totalSize += rm.size;
+                break;
+            }
+        }
+    }
+
+    saveVideo() {
+        if (!this.chunks.length) {
+            showToast('Chưa có video để lưu', 2500, 'warning');
+            return;
+        }
+        const list = this.chunks[0] !== this.firstChunk ? [this.firstChunk, ...this.chunks] : this.chunks;
+        const blob = new Blob(list, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const d = new Date();
+        a.download = `cam-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}.webm`;
+        a.href = url;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+        showToast(`✅ Đã lưu: ${(blob.size / 1048576).toFixed(1)} MB`, 3000, 'success');
+    }
+
+    updateRAMUI() {
+        const maxMB = this.max === Infinity ? '∞' : Math.round(this.max / 1048576);
+        const usedMB = Math.round(this.totalSize / 1048576);
+        const pct = this.max === Infinity ? 0 : Math.min((this.totalSize / this.max) * 100, 100);
+        const bar = document.getElementById('ramBar');
+        bar.style.width = pct + '%';
+        bar.className = 'ram-bar-fill ' + (pct >= 95 ? 'red' : pct >= 80 ? 'yellow' : 'green');
+        document.getElementById('ramText').textContent = `${usedMB}/${maxMB}MB`;
+        document.getElementById('btnSave').disabled = this.chunks.length === 0;
+    }
+
+    roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.moveTo(x + r, y);
+        ctx.lineTo(x + w - r, y);
+        ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+        ctx.lineTo(x + w, y + h - r);
+        ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+        ctx.lineTo(x + r, y + h);
+        ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+        ctx.lineTo(x, y + r);
+        ctx.quadraticCurveTo(x, y, x + r, y);
+        ctx.closePath();
+    }
+
+    drawHUD() {
+        const cw = this.canvas.width;
+        const ch = this.canvas.height;
+        const now = new Date();
+        const date = now.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+        const time = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        const speed = this.gps.getSpeed();
+        const speedNum = speed.toFixed(1);
+        const unit = 'km/h';
+
+        const minDim = Math.min(cw, ch);
+
+        // Scale theo kích thước màn hình
+        const dateSize   = minDim * 0.028;
+        const timeSize   = minDim * 0.042;
+        const speedSize  = minDim * 0.068;
+        const unitSize   = minDim * 0.026;
+
+        const padX = minDim * 0.038;
+        const padTop = minDim * 0.026;
+        const padBottom = minDim * 0.024;
+        const margin = minDim * 0.028;
+        const radius = minDim * 0.02;
+        const gap = minDim * 0.018;          // khoảng cách giữa các dòng (giãn ra)
+        const accentW = minDim * 0.007;
+
+        this.ctx.save();
+        if (this.rotateHUD === 90) {
+            this.ctx.translate(cw / 2, ch / 2);
+            this.ctx.rotate(Math.PI / 2);
+            this.ctx.translate(-ch / 2, -cw / 2);
+        }
+
+        // Đo kích thước text
+        this.ctx.font = `600 ${dateSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        const dateW = this.ctx.measureText(date).width;
+
+        this.ctx.font = `700 ${timeSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        const timeW = this.ctx.measureText(time).width;
+
+        this.ctx.font = `800 ${speedSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        const speedW = this.ctx.measureText(speedNum).width;
+
+        this.ctx.font = `600 ${unitSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        const unitW = this.ctx.measureText(unit).width;
+
+        const contentW = Math.max(dateW, timeW, speedW + unitW + minDim * 0.01);
+        const boxW = contentW + padX * 2 + accentW + minDim * 0.01;
+        // Chiều cao theo khoảng cách dòng mới
+        const boxH = padTop + padBottom + dateSize + gap + timeSize + gap + speedSize * 0.92;
+
+        const hudX = margin;
+        const hudY = margin;
+
+        // Màu tốc độ theo ngưỡng
+        const speedColor = speed >= 50 ? '#ff3b30' : speed >= 30 ? '#ff9f0a' : '#30d158';
+
+        // --- Nền glass ---
+        this.ctx.fillStyle = 'rgba(0, 0, 0, 0.42)';
+        this.roundRect(this.ctx, hudX, hudY, boxW, boxH, radius);
+        this.ctx.fill();
+
+        // Viền mỏng sáng
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+        this.ctx.lineWidth = Math.max(1, minDim * 0.002);
+        this.roundRect(this.ctx, hudX, hudY, boxW, boxH, radius);
+        this.ctx.stroke();
+
+        // Accent bar bên trái theo màu tốc độ
+        this.ctx.fillStyle = speedColor;
+        this.ctx.beginPath();
+        this.ctx.moveTo(hudX + radius, hudY);
+        this.ctx.lineTo(hudX + accentW, hudY);
+        this.ctx.lineTo(hudX + accentW, hudY + boxH);
+        this.ctx.lineTo(hudX + radius, hudY + boxH);
+        this.ctx.quadraticCurveTo(hudX, hudY + boxH, hudX, hudY + boxH - radius);
+        this.ctx.lineTo(hudX, hudY + radius);
+        this.ctx.quadraticCurveTo(hudX, hudY, hudX + radius, hudY);
+        this.ctx.closePath();
+        this.ctx.fill();
+
+        // --- Nội dung ---
+        let tx = hudX + padX + accentW + minDim * 0.006;
+        let ty = hudY + padTop + dateSize * 0.82;
+
+        // Ngày
+        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+        this.ctx.font = `600 ${dateSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        this.ctx.fillText(date, tx, ty);
+
+        // Giờ
+        ty += dateSize + gap;
+        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        this.ctx.font = `700 ${timeSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        this.ctx.fillText(time, tx, ty);
+
+        // Tốc độ (số lớn + đơn vị nhỏ)
+        ty += timeSize + gap;
+        this.ctx.fillStyle = speedColor;
+        this.ctx.font = `800 ${speedSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        this.ctx.fillText(speedNum, tx, ty);
+
+        // Đơn vị km/h
+        const unitX = tx + speedW + minDim * 0.01;
+        const unitY = ty - speedSize * 0.1;
+        this.ctx.fillStyle = 'rgba(255, 255, 255, 0.55)';
+        this.ctx.font = `600 ${unitSize}px -apple-system, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif`;
+        this.ctx.fillText(unit, unitX, unitY);
+
+        this.ctx.restore();
+    }
+
+    startDraw() {
+        if (this.rendering) return;
+        this.rendering = true;
+
+        const draw = () => {
+            if (!this.rendering) return;
+
+            const vw = this.video.videoWidth;
+            const vh = this.video.videoHeight;
+
+            if (!vw || !vh) {
+                requestAnimationFrame(draw);
+                return;
+            }
+
+            const container = document.getElementById('canvasContainer');
+            const cw = container.clientWidth;
+            const ch = container.clientHeight;
+
+            if (this.canvas.width !== cw || this.canvas.height !== ch) {
+                this.canvas.width = cw;
+                this.canvas.height = ch;
+            }
+
+            this.ctx.clearRect(0, 0, cw, ch);
+
+            const videoRatio = vw / vh;
+            const containerRatio = cw / ch;
+
+            let drawW, drawH, offsetX, offsetY;
+
+            if (containerRatio > videoRatio) {
+                drawW = cw;
+                drawH = cw / videoRatio;
+            } else {
+                drawH = ch;
+                drawW = ch * videoRatio;
+            }
+            offsetX = (cw - drawW) / 2;
+            offsetY = (ch - drawH) / 2;
+
+            this.ctx.save();
+            if (this.mirror) {
+                this.ctx.translate(cw, 0);
+                this.ctx.scale(-1, 1);
+                this.ctx.drawImage(this.video, offsetX, offsetY, drawW, drawH);
+            } else {
+                this.ctx.drawImage(this.video, offsetX, offsetY, drawW, drawH);
+            }
+            this.ctx.restore();
+
+            this.drawHUD();
+
+            requestAnimationFrame(draw);
+        };
+
+        draw();
+    }
+}
+
+const cam = new VideoRecorder(200);
+
+// Fix double-fire: touchstart + click both fire on mobile.
+// Use pointerup + short lock so only 1 execution per physical tap.
+function attachClick(el, handler) {
+    let locked = false;
+    const run = (e) => {
+        e.stopPropagation();
+        if (locked) return;
+        locked = true;
+        showControls(); // keep modal visible while interacting
+        handler();
+        setTimeout(() => { locked = false; }, 350);
+    };
+    el.addEventListener('pointerup', run, { passive: true });
+    // Fallback for older browsers
+    el.addEventListener('click', (e) => {
+        if (e.pointerType) return; // already handled by pointerup
+        run(e);
+    });
+}
+
+attachClick(document.getElementById('btnMirror'), () => cam.toggleMirror());
+attachClick(document.getElementById('btnRotate'), () => cam.toggleRotate());
+attachClick(document.getElementById('btnCam'), () => cam.switchCam());
+attachClick(document.getElementById('btnSave'), () => cam.saveVideo());
+
+// Keep modal open when changing RAM limit
+document.getElementById('ramLimit').addEventListener('change', e => {
+    showControls();
+    cam.setMaxMB(parseInt(e.target.value));
+});
+document.getElementById('ramLimit').addEventListener('pointerdown', e => {
+    e.stopPropagation();
+    showControls();
+}, { passive: true });
+
+cam.initCam('user');
+window.addEventListener('beforeunload', () => { cam.stopRecording(); cam.gps.stop(); });
+</script>
+</body>
+</html>
